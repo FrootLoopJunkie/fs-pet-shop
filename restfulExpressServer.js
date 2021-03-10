@@ -1,127 +1,129 @@
 const express = require('express');
 const morgan = require('morgan');
-const {Client} = require('pg');
-const fs = require('fs');
-const data = require('./pets.json');
+const pool = require('./pg')
 const app = express();
 const PORT = process.env.PORT||8000;
 
-const client= new Client({
-    user:'Kolby',
-    password:'',
-    host: 'localhost',
-    port: 5432,
-    database: "petshop"
-})
-
-client.connect(async(err, res)=>{
-    let myDreams;
-    for (elem in data){
-    let name=data[elem].name;
-    let age = data[elem].age;
-    let kind = data[elem].kind;
-        let response =  await client.query(`INSERT INTO pets (Name, Age, Kind) VALUES ('${name}', '${age}', '${kind}')`)
-            .then((result)=>{
-                console.log(result)
-                myDreams = result;
-            })
-    }
-    client.end();
-       
-});
-
 //middleware
+//MORGAN
 app.use(morgan('combined'));
+//express acess to body
 app.use(express.json());
 
 //CREATE
 app.post('/pets', (req, res)=>{
-    const newPet= req.body;
-    //create temp obj taht only takes values we want
-    let templatePet = {
-        name : newPet.name,
-        age : newPet.age,
-        kind : newPet.kind
-    }
-    //if three catagories exisit allow it to create 
-    if(newPet.name && newPet.age && newPet.kind){ //checks that user input a name, age, and a kind
-        res.status(200).send(`${newPet.name} was added`);
-        console.log(`Added ${newPet.name} to database.`);
-        data.push(templatePet);
-        fs.writeFileSync('./pets.json', JSON.stringify(data));
-    }else{
-        res.status(400).send(`Please enter a name, age, and kind.`)
+    try{
+        newPet= req.body;
+        if (isNaN(parseInt(newPet.age)) === true){
+            res.status(400).send(`${newPet.age} is not an int`);
+        }else if(newPet.name && newPet.kind && newPet.age){
+            const result = pool.query(`INSERT INTO pets (name, kind, age) VALUES ('${newPet.name}', '${newPet.kind}', '${newPet.age}')`);
+            res.status(200).send(`${newPet.name} was created`);
+        }else{ 
+            res.status(400).send('Please Enter a Name Age and Kind~ You Dumb Farmer.')
+        }
+    }catch(err){
+        console.error(err);
+        res.status(400).send(`Error Encountered: ${err}`);
     }
 })
 
 //READ ALL
-app.get('/pets', (req, res)=>{
-    res.status(200).send(data);
+app.get('/pets', async (req, res)=>{
+    try{
+        const result = await pool.query('SELECT * FROM pets ORDER BY id ASC');
+        res.status(200).send(result.rows);
+    }catch(err){
+        console.error(err);
+        res.status(400).send(`Error Encountered: ${err}`);
+    }
 })
 
 //READ SPECIFIC
-app.get('/pets/:id', (req,res)=>{
-    const id = req.params.id
-    for(elem in data){
-        if(elem === id){
-            res.status(200).send(data[elem])
+app.get('/pets/:id', async(req,res)=>{
+    const {id} = req.params;
+    try{
+        const result = await pool.query(`SELECT * FROM pets WHERE id = ${id}`);
+        let resMax = await pool.query(`SELECT MAX(id) FROM pets`);
+        let maxID = resMax.rows[0].max;
+        if(id < 1 || id > maxID){
+            res.status(400).send('ID is Out of Bounds');
             return;
         }
+        if(result.rows.length === 0){
+            res.status(400).send('Pet at This ID was Deleted');
+            return;
+        }
+        res.status(200).send(result.rows);
+    }catch(err){
+        console.error(err);
+        res.status(400).send(`Error Encountered: ${err}`);
     }
-    res.status(404).send(`${id} not found try id 0-${data.length}`)
 })
-
+    
 //UPDATE
-app.put('/pets/:id', (req,res)=>{
-    const id = req.params.id;
-    const petUpdate = req.body
-    //loop through the array looking for matching id
-    for(elem in data){
-        if(elem === id){
-            //temp to limit user inputs
-            let templatePet = {
-                name : petUpdate.name ||  data[elem].name,
-                age : petUpdate.age || data[elem].age,
-                kind : petUpdate.kind || data[elem].kind
-                }
-                //check it exisit and a num for age
-                if(templatePet.age && isNaN(parseInt(templatePet.age)) === true){
-                    res.send(`${templatePet.age} is not a number`)
-                    return
-                }
-                //edit the tar obj and mere with user data
-                data[elem] = {...data[elem], ...templatePet};
-                data[elem].age = parseInt(data[elem].age)
-                fs.writeFileSync('./pets.json', JSON.stringify(data));
-                res.status(200).send(`${templatePet.name} has been updated`)
-                return;
-        }   
+app.put('/pets/:id', async(req,res)=>{
+    try{
+        const {id} = req.params;
+        const petUpdate = req.body;
+
+        let querySpecific = await pool.query(`SELECT * FROM pets WHERE id = ${id}`);
+        let resMax = await pool.query(`SELECT MAX(id) FROM pets`);
+        let maxID = resMax.rows[0].max;
+        let templatePet = {
+        name : petUpdate.name ||  querySpecific.rows[0].name,
+        age : petUpdate.age || querySpecific.rows[0].age,
+        kind : petUpdate.kind || querySpecific.rows[0].kind
+        }
+        if(id < 1 || id > maxID){
+            res.status(400).send('ID is Out of Bounds');
+            return;
+        }
+        if(querySpecific.rows.length === 0){
+            const result = await pool.query(`INSERT INTO pets (id, name, age, kind) VALUES ('${id}', '${templatePet.name}', '${templatePet.age}', '${templatePet.kind}')`);
+            res.status(200).send(`Deleted ${templatePet.name} was updated to ${JSON.stringify(templatePet)} at ID: ${id}`);
+            return;
+        }
+        //check it exisit and a num for age
+        if(templatePet.age && isNaN(parseInt(templatePet.age)) === true){
+            res.status(400).send(`${templatePet.age} is not a number`);
+            return
+        }
+        const result = await pool.query(`UPDATE pets SET name = '${templatePet.name}', age = '${templatePet.age}', kind = '${templatePet.kind}' WHERE id = ${id}`);
+        res.status(200).send(`${templatePet.name} was updated to ${JSON.stringify(templatePet)}`);
+    }catch(err){
+        console.error(err);
+        res.status(400).send(`Error Encountered: ${err}`);
     }
-    res.status(400).send(`Pet with id ${id} not found`)
 })
 
 //DELETE            
-app.delete('/pets/:id', (req,res)=>{
-    const id = req.params.id
-    for(elem in data){
-        if(id === elem){
-            let name = data[elem].name;
-            delete data[elem];
-            //checking if obj exisit 
-            let filteredData = data.filter(Boolean)
-            fs.writeFileSync('./pets.json', JSON.stringify(filteredData));
-            res.status(200).send(`pet ${name} was deleted`)
-            return
+app.delete('/pets/:id', async(req,res)=>{
+    try{
+        const {id} = req.params;
+        let querySpecific = await pool.query(`SELECT * FROM pets WHERE id = ${id}`);
+        let resMax = await pool.query(`SELECT MAX(id) FROM pets`);
+        let maxID = resMax.rows[0].max;
+        if(id < 1 || id > maxID){
+            res.status(400).send('ID is Out of Bounds');
+            return;
         }
+        if(querySpecific.rows.length === 0){
+            res.status(400).send(`Pet at ID ${id} was already deleted or`);
+            return;
+        }
+        res.status(200).send(`${querySpecific.rows[0].name} at ID ${id} was Deleted`);
+        const result = pool.query(`DELETE FROM pets WHERE id =${id}`);
+    }catch(err){
+        console.error(err);
+        res.status(400).send(`Error Encountered: ${err}`);
     }
-    res.status(400).send(`Pet with id ${id} not found`)
 })
 
 app.use((req, res)=>{
     res.status(404).send(`Requested page not found`);
 })
 
-
 app.listen(PORT, ()=>{
-    console.log(`Listening on port: ${PORT}`)
+    console.log(`Listening on port: ${PORT}`);
 })
