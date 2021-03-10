@@ -1,25 +1,52 @@
 const express = require('express');
 const morgan = require('morgan');
+const {Client} = require('pg');
 const fs = require('fs');
-const data = require('./pets.json')
-const app = express()
-const PORT = process.env.PORT||8000
+const data = require('./pets.json');
+const app = express();
+const PORT = process.env.PORT||8000;
+
+const client= new Client({
+    user:'Kolby',
+    password:'',
+    host: 'localhost',
+    port: 5432,
+    database: "petshop"
+})
+
+client.connect(async(err, res)=>{
+    let myDreams;
+    for (elem in data){
+    let name=data[elem].name;
+    let age = data[elem].age;
+    let kind = data[elem].kind;
+        let response =  await client.query(`INSERT INTO pets (Name, Age, Kind) VALUES ('${name}', '${age}', '${kind}')`)
+            .then((result)=>{
+                console.log(result)
+                myDreams = result;
+            })
+    }
+    client.end();
+       
+});
 
 //middleware
 app.use(morgan('combined'));
-app.use(express.json())
+app.use(express.json());
 
 //CREATE
 app.post('/pets', (req, res)=>{
-    const newPet= req.body
+    const newPet= req.body;
+    //create temp obj taht only takes values we want
     let templatePet = {
         name : newPet.name,
         age : newPet.age,
         kind : newPet.kind
     }
-    if(newPet.name && newPet.age && newPet.kind){
-        res.status(200).send(`${newPet.name} was added`)
-        console.log(`Added ${newPet.name} to database.`)
+    //if three catagories exisit allow it to create 
+    if(newPet.name && newPet.age && newPet.kind){ //checks that user input a name, age, and a kind
+        res.status(200).send(`${newPet.name} was added`);
+        console.log(`Added ${newPet.name} to database.`);
         data.push(templatePet);
         fs.writeFileSync('./pets.json', JSON.stringify(data));
     }else{
@@ -48,17 +75,21 @@ app.get('/pets/:id', (req,res)=>{
 app.put('/pets/:id', (req,res)=>{
     const id = req.params.id;
     const petUpdate = req.body
+    //loop through the array looking for matching id
     for(elem in data){
         if(elem === id){
+            //temp to limit user inputs
             let templatePet = {
                 name : petUpdate.name ||  data[elem].name,
                 age : petUpdate.age || data[elem].age,
                 kind : petUpdate.kind || data[elem].kind
                 }
+                //check it exisit and a num for age
                 if(templatePet.age && isNaN(parseInt(templatePet.age)) === true){
                     res.send(`${templatePet.age} is not a number`)
                     return
                 }
+                //edit the tar obj and mere with user data
                 data[elem] = {...data[elem], ...templatePet};
                 data[elem].age = parseInt(data[elem].age)
                 fs.writeFileSync('./pets.json', JSON.stringify(data));
@@ -76,13 +107,20 @@ app.delete('/pets/:id', (req,res)=>{
         if(id === elem){
             let name = data[elem].name;
             delete data[elem];
-            fs.writeFileSync('./pets.json', JSON.stringify(data));
+            //checking if obj exisit 
+            let filteredData = data.filter(Boolean)
+            fs.writeFileSync('./pets.json', JSON.stringify(filteredData));
             res.status(200).send(`pet ${name} was deleted`)
             return
         }
     }
     res.status(400).send(`Pet with id ${id} not found`)
 })
+
+app.use((req, res)=>{
+    res.status(404).send(`Requested page not found`);
+})
+
 
 app.listen(PORT, ()=>{
     console.log(`Listening on port: ${PORT}`)
